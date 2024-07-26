@@ -1,8 +1,8 @@
+require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const bodyParser = require("body-parser");
 const cors = require("cors");
-const noteRoutes = require("./routes/noteRoutes");
 const userRoutes = require("./routes/userRoutes");
 const http = require("node:http");
 const { startSocket } = require("./websocket");
@@ -10,7 +10,7 @@ const { startSocket } = require("./websocket");
 const app = express();
 const PORT = process.env.PORT || 5002;
 
-mongoose.connect("mongodb://localhost:27017/justnote", {
+mongoose.connect(process.env.DATABASE_URL, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 });
