@@ -18,6 +18,9 @@ mongoose.connect(process.env.DATABASE_URL, {
 app.use(cors());
 app.use(bodyParser.json());
 app.use("/api", userRoutes);
+app.get("/", (req, res) => {
+  res.send("Hello World!");
+});
 
 const server = http.createServer(app);
 
