@@ -85,6 +85,17 @@ async function emitFolders(socket, userId) {
   socket.emit("folders", folders);
 }
 
+async function registerUser(username, password) {
+  try {
+    const user = new User({ username, password });
+    await user.save();
+    const token = await generateAuthToken(user);
+    return { user, token };
+  } catch (error) {
+    console.log(error);
+    throw new Error("Error registering user");
+  }
+}
 async function loginUser(username, password) {
   const user = await User.findOne({ username });
   if (!user) {
@@ -94,8 +105,8 @@ async function loginUser(username, password) {
   if (!isMatch) {
     throw new Error("Incorrect password.");
   }
-
-  return await generateAuthToken(user);
+  const token = await generateAuthToken(user);
+  return { user, token };
 }
 
 async function getRoot(userId) {
@@ -130,15 +141,25 @@ function router(socket) {
   const unauthRouter = new Map();
   unauthRouter.set("login", async function login(username, password, callback) {
     try {
-      console.log("login", username, password);
-      const token = await loginUser(username, password);
-      const user = await authenticateToken(token);
+      const { token, user } = await loginUser(username, password);
       emitFolders(socket, user._id);
       callback({ token });
     } catch (error) {
-      callback({ error: error.message });
+      callback({ error: errorToJSON(error) });
     }
   });
+  unauthRouter.set(
+    "register",
+    async function register(username, password, callback) {
+      try {
+        const { token, user } = await registerUser(username, password);
+        emitFolders(socket, user._id);
+        callback({ token });
+      } catch (error) {
+        callback({ error: errorToJSON(error) });
+      }
+    }
+  );
 
   authRouter.set("getNote", async function getNote(folderId, callback) {
     console.log("getNote", folderId);

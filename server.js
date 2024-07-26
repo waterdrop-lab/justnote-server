@@ -3,7 +3,6 @@ const express = require("express");
 const mongoose = require("mongoose");
 const bodyParser = require("body-parser");
 const cors = require("cors");
-const userRoutes = require("./routes/userRoutes");
 const http = require("node:http");
 const { startSocket } = require("./websocket");
 
@@ -17,7 +16,6 @@ mongoose.connect(process.env.DATABASE_URL, {
 
 app.use(cors());
 app.use(bodyParser.json());
-app.use("/api", userRoutes);
 app.get("/", (req, res) => {
   res.send("Hello World!");
 });
