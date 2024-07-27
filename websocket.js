@@ -4,20 +4,12 @@ const User = require("./models/User");
 const Folder = require("./models/Folder");
 const Note = require("./models/Note");
 const AuthToken = require("./models/AuthToken");
+const { errorToJSON, errorLog } = require("./utils");
 
 const errorCode = {
   unauth: 401,
   noteNotExist: "noteNotExist",
 };
-
-function errorToJSON(error) {
-  return {
-    message: error.message,
-    name: error.name,
-    stack: error.stack,
-    ...error,
-  };
-}
 
 function generateToken() {
   const token = uuid();
@@ -86,15 +78,10 @@ async function emitFolders(socket, userId) {
 }
 
 async function registerUser(username, password) {
-  try {
-    const user = new User({ username, password });
-    await user.save();
-    const token = await generateAuthToken(user);
-    return { user, token };
-  } catch (error) {
-    console.log(error);
-    throw new Error("Error registering user");
-  }
+  const user = new User({ username, password });
+  await user.save();
+  const token = await generateAuthToken(user);
+  return { user, token };
 }
 async function loginUser(username, password) {
   const user = await User.findOne({ username });
@@ -140,24 +127,16 @@ function router(socket) {
   const authRouter = new Map();
   const unauthRouter = new Map();
   unauthRouter.set("login", async function login(username, password, callback) {
-    try {
-      const { token, user } = await loginUser(username, password);
-      emitFolders(socket, user._id);
-      callback({ token });
-    } catch (error) {
-      callback({ error: errorToJSON(error) });
-    }
+    const { token, user } = await loginUser(username, password);
+    emitFolders(socket, user._id);
+    callback({ token });
   });
   unauthRouter.set(
     "register",
     async function register(username, password, callback) {
-      try {
-        const { token, user } = await registerUser(username, password);
-        emitFolders(socket, user._id);
-        callback({ token });
-      } catch (error) {
-        callback({ error: errorToJSON(error) });
-      }
+      const { token, user } = await registerUser(username, password);
+      emitFolders(socket, user._id);
+      callback({ token });
     }
   );
 
@@ -240,7 +219,7 @@ function router(socket) {
       try {
         await handler(...args);
       } catch (err) {
-        console.log("catched error", err);
+        errorLog(err);
 
         const error = errorToJSON(err);
 
@@ -284,38 +263,57 @@ function startSocket(server) {
   });
 
   io.use((socket, next) => {
+    try {
+      next();
+    } catch (err) {
+      errorLog(err);
+      next(err);
+    }
+  });
+  io.use((socket, next) => {
     const token = socket.handshake.auth.token;
-    console.log("auth", socket.handshake.auth);
     if (!token) {
-      return next(); // 允许未登录用户继续连接
+      return next();
     }
 
     authenticateToken(token)
       .then((user) => {
-        console.log("authenticateToken", user);
         socket.user = user;
         next();
       })
       .catch((err) => {
-        console.error("Authentication error:", err);
+        errorLog(err);
         next(new Error("Authentication error"));
       });
   });
 
   io.on("connection", (socket) => {
-    console.log("a user connected");
+    try {
+      console.log("a user connected");
 
-    socket.emit(
-      "userInfo",
-      socket.user
-        ? { username: socket.user.username, token: socket.handshake.auth.token }
-        : {}
-    );
+      socket.emit(
+        "userInfo",
+        socket.user
+          ? {
+              username: socket.user.username,
+              token: socket.handshake.auth.token,
+            }
+          : {}
+      );
 
-    if (socket.user) {
-      emitFolders(socket, socket.user._id);
+      if (socket.user) {
+        emitFolders(socket, socket.user._id).catch((err) => {
+          errorLog(err);
+        });
+      }
+      router(socket);
+    } catch (error) {
+      errorLog(error);
     }
-    router(socket);
+
+    socket.on("connect_error", (err) => {
+      errorLog(err);
+    });
     socket.on("disconnect", () => {
       console.log("user disconnected");
     });
