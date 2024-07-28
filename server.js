@@ -26,18 +26,25 @@ mongoose.connect(process.env.DATABASE_URL, {
   useUnifiedTopology: true,
 });
 
+const systemInfo = {
+  env: process.env.NODE_ENV,
+};
+
 app.use(cors());
 app.use(bodyParser.json());
 app.get("/", (req, res) => {
-  res.send("Hello World!");
+  res.send("Hello Just Note");
+});
+app.get("/systemInfo", (req, res) => {
+  res.send(systemInfo);
 });
 app.use("/api", systemLogRoutes);
-
 
 const server = http.createServer(app);
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log("SystemInfo", systemInfo);
 });
 
 startSocket(server);
