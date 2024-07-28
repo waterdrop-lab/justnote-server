@@ -1,82 +1,24 @@
 const socketIo = require("socket.io");
-const { v4: uuid } = require("uuid");
+
 const User = require("./models/User");
 const Folder = require("./models/Folder");
 const Note = require("./models/Note");
 const AuthToken = require("./models/AuthToken");
+const { errorToJSON, errorLog } = require("./utils");
 
 const errorCode = {
   unauth: 401,
   noteNotExist: "noteNotExist",
 };
 
-function errorToJSON(error) {
-  return {
-    message: error.message,
-    name: error.name,
-    stack: error.stack,
-    ...error,
-  };
-}
-
-function generateToken() {
-  const token = uuid();
-  return "jn-" + token;
-}
-
-async function generateAuthToken(user) {
-  const token = generateToken();
-  const authToken = new AuthToken({
-    token,
-    userId: user._id,
-    expiresAt: new Date(Date.now() + 3600 * 1000 * 24), // expire in one day
-  });
-  await authToken.save();
-  return token;
-}
-async function authenticateToken(token) {
-  const result = await AuthToken.aggregate([
-    { $match: { token } },
-    {
-      $lookup: {
-        from: "users", // 要连接的集合名称
-        localField: "userId",
-        foreignField: "_id",
-        as: "user",
-      },
-    },
-    { $unwind: "$user" }, // 展开 user 数组
-    { $project: { token: 1, user: 1 } }, // 投影需要的字段
-  ]);
-
-  if (result.length === 0) {
-    return null;
-  }
-
-  return result[0].user;
-}
-
-async function createNote(userId, parentId, name, content) {
-  const folder = await createFolder(name, userId, parentId, true);
-
-  const note = new Note({
-    content,
-    folderId: folder._id,
-    userId,
-  });
-  await note.save();
-  return { folder, note };
-}
-
 async function emitFolders(socket, userId) {
-  let folders = await Folder.find({ userId });
-  if (folders.length === 0) {
-    folders.push(await getRoot(userId));
-  }
+  const folders = await Folder.getFolders(userId);
+
   if (folders.length === 1) {
-    const { folder } = await createNote(userId, folders[0]._id, "", "");
+    const { folder } = await Note.create(userId, folders[0]._id, "", "");
     folders.push(folder);
   }
+
   folders.sort((a, b) => {
     const timeA = new Date(a.createdAt);
     const timeB = new Date(b.createdAt);
@@ -85,86 +27,25 @@ async function emitFolders(socket, userId) {
   socket.emit("folders", folders);
 }
 
-async function registerUser(username, password) {
-  try {
-    const user = new User({ username, password });
-    await user.save();
-    const token = await generateAuthToken(user);
-    return { user, token };
-  } catch (error) {
-    console.log(error);
-    throw new Error("Error registering user");
-  }
-}
-async function loginUser(username, password) {
-  const user = await User.findOne({ username });
-  if (!user) {
-    throw new Error("Incorrect username.");
-  }
-  const isMatch = await user.comparePassword(password);
-  if (!isMatch) {
-    throw new Error("Incorrect password.");
-  }
-  const token = await generateAuthToken(user);
-  return { user, token };
-}
-
-async function getRoot(userId) {
-  const folder = await Folder.findOne({ userId, parentId: null });
-  if (folder) return folder;
-  const root = new Folder({
-    name: "root",
-    parentId: null,
-    userId,
-  });
-  await root.save();
-  return root;
-}
-
-async function createFolder(name, userId, parentId, isFile) {
-  if (!parentId) {
-    parentId = (await getRoot(userId))._id;
-  }
-
-  const folder = new Folder({
-    name: name,
-    parentId: parentId,
-    userId,
-    isFile,
-  });
-  await folder.save();
-  return folder;
-}
-
 function router(socket) {
   const authRouter = new Map();
   const unauthRouter = new Map();
   unauthRouter.set("login", async function login(username, password, callback) {
-    try {
-      const { token, user } = await loginUser(username, password);
-      emitFolders(socket, user._id);
-      callback({ token });
-    } catch (error) {
-      callback({ error: errorToJSON(error) });
-    }
+    const { token, user } = await User.login(username, password);
+    emitFolders(socket, user._id);
+    callback({ token });
   });
   unauthRouter.set(
     "register",
     async function register(username, password, callback) {
-      try {
-        const { token, user } = await registerUser(username, password);
-        emitFolders(socket, user._id);
-        callback({ token });
-      } catch (error) {
-        callback({ error: errorToJSON(error) });
-      }
+      const { token, user } = await User.register(username, password);
+      emitFolders(socket, user._id);
+      callback({ token });
     }
   );
 
   authRouter.set("getNote", async function getNote(folderId, callback) {
-    console.log("getNote", folderId);
-    const folder = await Folder.findById(folderId);
-    const note = await Note.findOne({ folderId });
+    const { note, folder } = await Note.getNote(folderId);
     if (!note || !folder) {
       return callback({
         error: {
@@ -181,58 +62,44 @@ function router(socket) {
     });
   });
   authRouter.set("addFolder", async function addFolder(name, parentId) {
-    const userId = socket.user._id;
-    await createFolder(name, userId, parentId, false);
+    await Folder.create(name, socket.user._id, parentId, false);
     await emitFolders(socket, userId);
   });
+  authRouter.set(
+    "deleteFolder",
+    async function deleteFolder(folderId, callback) {
+      const userId = socket.user._id;
+      await Folder.deleteFolder(userId, folderId);
+      await emitFolders(socket, userId);
+      callback({});
+    }
+  );
   authRouter.set("updateNote", async function updateNote(folderId, content) {
     const userId = socket.user._id;
-    await Folder.findOneAndUpdate(
-      { _id: folderId, userId },
-      { updateAt: new Date() }
-    );
-    await Note.findOneAndUpdate(
-      { folderId, userId },
-      { content, lastUpdateAt: new Date() }
-    );
+    await Note.updateNoteContent(userId, folderId, content);
   });
   authRouter.set(
     "updateNoteTitle",
     async function updateNoteTitle(folderId, title) {
       const userId = socket.user._id;
-      await Folder.findOneAndUpdate(
-        { _id: folderId, userId },
-        { name: title, updateAt: new Date() }
-      );
-      await Note.findOneAndUpdate({ folderId }, { updateAt: new Date() });
+      await Note.updateNoteTitle(userId, folderId, title);
       await emitFolders(socket, userId);
-    }
-  );
-  authRouter.set(
-    "deleteFolder",
-    async function deleteFolder(folderId, callback) {
-      const userId = socket.user._id;
-      await Folder.findOneAndDelete({ _id: folderId, userId });
-      await emitFolders(socket, userId);
-      callback({});
     }
   );
   authRouter.set(
     "addNote",
     async function addNote(name, parentId, content, callback) {
       const userId = socket.user._id;
-      const { note, folder } = await createNote(
+      const { note, folder } = await Note.create(
         userId,
         parentId,
         name,
         content
       );
-      callback({ note, folder });
       await emitFolders(socket, userId);
+      callback({ note, folder });
     }
   );
-
-  // unauthRouter
 
   const errorHandler =
     (handler) =>
@@ -240,7 +107,7 @@ function router(socket) {
       try {
         await handler(...args);
       } catch (err) {
-        console.log("catched error", err);
+        errorLog(err);
 
         const error = errorToJSON(err);
 
@@ -284,38 +151,56 @@ function startSocket(server) {
   });
 
   io.use((socket, next) => {
+    try {
+      next();
+    } catch (err) {
+      errorLog(err);
+      next(err);
+    }
+  });
+  io.use((socket, next) => {
     const token = socket.handshake.auth.token;
-    console.log("auth", socket.handshake.auth);
     if (!token) {
-      return next(); // 允许未登录用户继续连接
+      return next();
     }
 
-    authenticateToken(token)
+    AuthToken.toUser(token)
       .then((user) => {
-        console.log("authenticateToken", user);
         socket.user = user;
         next();
       })
       .catch((err) => {
-        console.error("Authentication error:", err);
+        errorLog(err);
         next(new Error("Authentication error"));
       });
   });
-
   io.on("connection", (socket) => {
-    console.log("a user connected");
+    try {
+      console.log("a user connected");
 
-    socket.emit(
-      "userInfo",
-      socket.user
-        ? { username: socket.user.username, token: socket.handshake.auth.token }
-        : {}
-    );
+      socket.emit(
+        "userInfo",
+        socket.user
+          ? {
+              username: socket.user.username,
+              token: socket.handshake.auth.token,
+            }
+          : {}
+      );
 
-    if (socket.user) {
-      emitFolders(socket, socket.user._id);
+      if (socket.user) {
+        emitFolders(socket, socket.user._id).catch((err) => {
+          errorLog(err);
+        });
+      }
+      router(socket);
+    } catch (error) {
+      errorLog(error);
     }
-    router(socket);
+
+    socket.on("connect_error", (err) => {
+      errorLog(err);
+    });
     socket.on("disconnect", () => {
       console.log("user disconnected");
     });
