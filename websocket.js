@@ -20,8 +20,8 @@ async function emitFolders(socket, userId) {
   }
 
   folders.sort((a, b) => {
-    const timeA = new Date(a.createdAt);
-    const timeB = new Date(b.createdAt);
+    const timeA = new Date(a.updatedAt);
+    const timeB = new Date(b.updatedAt);
     return timeB - timeA;
   });
   socket.emit("folders", folders);
@@ -58,6 +58,8 @@ function router(socket) {
       note: {
         title: folder.name,
         content: note.content,
+        updatedAt: note.updatedAt,
+        folderId: folder._id,
       },
     });
   });
@@ -77,6 +79,7 @@ function router(socket) {
   authRouter.set("updateNote", async function updateNote(folderId, content) {
     const userId = socket.user._id;
     await Note.updateNoteContent(userId, folderId, content);
+    await emitFolders(socket, userId);
   });
   authRouter.set(
     "updateNoteTitle",
