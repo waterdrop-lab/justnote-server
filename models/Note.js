@@ -4,7 +4,7 @@ const Folder = require("./Folder");
 const noteSchema = new mongoose.Schema({
   content: { type: String },
   createdAt: { type: Date, default: Date.now },
-  updateAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
   userId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: "User" },
   folderId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -37,19 +37,19 @@ noteSchema.statics.updateNoteContent = async function (
 ) {
   await Folder.findOneAndUpdate(
     { _id: folderId, userId },
-    { updateAt: new Date() }
+    { updatedAt: new Date() }
   );
   await this.findOneAndUpdate(
     { folderId, userId },
-    { content, updateAt: new Date() }
+    { content, updatedAt: new Date() }
   );
 };
 noteSchema.statics.updateNoteTitle = async function (userId, folderId, title) {
   await Folder.findOneAndUpdate(
     { _id: folderId, userId },
-    { name: title, updateAt: new Date() }
+    { name: title, updatedAt: new Date() }
   );
-  await this.findOneAndUpdate({ folderId, userId }, { updateAt: new Date() });
+  await this.findOneAndUpdate({ folderId, userId }, { updatedAt: new Date() });
 };
 
 module.exports = mongoose.model("Note", noteSchema);
