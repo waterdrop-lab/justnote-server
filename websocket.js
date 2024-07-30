@@ -5,105 +5,14 @@ const Folder = require("./models/Folder");
 const Note = require("./models/Note");
 const AuthToken = require("./models/AuthToken");
 const { errorToJSON, errorLog } = require("./utils");
+const { authRouter, unauthRouter, emitFolders } = require("./websocketRoutes");
 
 const errorCode = {
   unauth: 401,
   noteNotExist: "noteNotExist",
 };
 
-async function emitFolders(socket, userId) {
-  const folders = await Folder.getFolders(userId);
-
-  if (folders.length === 1) {
-    const { folder } = await Note.create(userId, folders[0]._id, "", "");
-    folders.push(folder);
-  }
-
-  folders.sort((a, b) => {
-    const timeA = new Date(a.updatedAt);
-    const timeB = new Date(b.updatedAt);
-    return timeB - timeA;
-  });
-  socket.emit("folders", folders);
-}
-
 function router(socket) {
-  const authRouter = new Map();
-  const unauthRouter = new Map();
-  unauthRouter.set("login", async function login(username, password, callback) {
-    const { token, user } = await User.login(username, password);
-    emitFolders(socket, user._id);
-    callback({ token });
-  });
-  unauthRouter.set(
-    "register",
-    async function register(username, password, callback) {
-      const { token, user } = await User.register(username, password);
-      emitFolders(socket, user._id);
-      callback({ token });
-    }
-  );
-
-  authRouter.set("getNote", async function getNote(folderId, callback) {
-    const { note, folder } = await Note.getNote(folderId);
-    if (!note || !folder) {
-      return callback({
-        error: {
-          errorCode: errorCode.noteNotExist,
-          folderId,
-        },
-      });
-    }
-    callback({
-      note: {
-        title: folder.name,
-        content: note.content,
-        updatedAt: note.updatedAt,
-        folderId: folder._id,
-      },
-    });
-  });
-  authRouter.set("addFolder", async function addFolder(name, parentId) {
-    await Folder.create(name, socket.user._id, parentId, false);
-    await emitFolders(socket, userId);
-  });
-  authRouter.set(
-    "deleteFolder",
-    async function deleteFolder(folderId, callback) {
-      const userId = socket.user._id;
-      await Folder.deleteFolder(userId, folderId);
-      await emitFolders(socket, userId);
-      callback({});
-    }
-  );
-  authRouter.set("updateNote", async function updateNote(folderId, content) {
-    const userId = socket.user._id;
-    await Note.updateNoteContent(userId, folderId, content);
-    await emitFolders(socket, userId);
-  });
-  authRouter.set(
-    "updateNoteTitle",
-    async function updateNoteTitle(folderId, title) {
-      const userId = socket.user._id;
-      await Note.updateNoteTitle(userId, folderId, title);
-      await emitFolders(socket, userId);
-    }
-  );
-  authRouter.set(
-    "addNote",
-    async function addNote(name, parentId, content, callback) {
-      const userId = socket.user._id;
-      const { note, folder } = await Note.create(
-        userId,
-        parentId,
-        name,
-        content
-      );
-      await emitFolders(socket, userId);
-      callback({ note, folder });
-    }
-  );
-
   const errorHandler =
     (handler) =>
     async (...args) => {
@@ -135,11 +44,12 @@ function router(socket) {
       }
       await handler(...args);
     };
+
   authRouter.forEach((handler, message) => {
-    socket.on(message, errorHandler(authHandler(handler)));
+    socket.on(message, errorHandler(authHandler(handler.bind({ socket }))));
   });
   unauthRouter.forEach((handler, message) => {
-    socket.on(message, errorHandler(handler));
+    socket.on(message, errorHandler(handler.bind({ socket })));
   });
 }
 
@@ -152,7 +62,6 @@ function startSocket(server) {
       credentials: true,
     },
   });
-
   io.use((socket, next) => {
     try {
       next();
