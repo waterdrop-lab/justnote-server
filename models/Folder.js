@@ -49,9 +49,6 @@ folderSchema.statics.getFolders = async function (userId) {
       { isDeleted: null },
     ],
   });
-  if (folders.length === 0) {
-    folders.push(await this.getRoot(userId));
-  }
   return folders;
 };
 
